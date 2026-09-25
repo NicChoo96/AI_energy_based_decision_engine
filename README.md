@@ -278,3 +278,12 @@ express `if`, the whole point is gone.
 - **The ledger grows monotonically.** By layer 5, the model is reading every fact
   absorbed since layer 1, and input tokens climb with it. That is deliberate —
   later layers see earlier reasoning — but it is the thing to watch on cost.
+
+## License
+
+MIT — see [LICENSE](LICENSE). Use it, fork it, ship it in something commercial;
+just keep the copyright notice.
+
+The models are separate works and carry their own terms. `laya` is a dependency
+installed into the environment, not code vendored into this repository, and JEV
+is reached over HTTP. Neither is relicensed by the MIT grant above.
