@@ -8,6 +8,13 @@ multiple-choice question and following whatever it answers. The flow you want to
 build is written as plain text in a `.rule` file: layers, the question each layer
 asks, the candidate branches, and what to call when you reach the end.
 
+![The rule mesh console after a completed run: five model decisions, each showing the question the model was asked, its answer spread as probability bars, the accumulated state ledger on the right, and the actions and triggers the run fired.](docs/console.png)
+
+*`loan_underwriting` on JEV, five decisions in. **Left** — the flow, the backend
+toggle, the situation. **Centre** — the question each layer asked, the branch the
+model chose, and the full probability spread. **Right** — the exact free text the
+model was shown, and the actions and triggers the run fired.*
+
 ```
             .rule text                engine                    model
    ┌──────────────────────┐   ┌────────────────────┐   ┌────────────────────┐
@@ -40,11 +47,15 @@ close. That is the experiment.
 
 ## Install
 
+Launch everything through [uv](https://docs.astral.sh/uv/). It creates and uses the
+project's own `.venv`, which matters more than it sounds — see [Why uv](#why-uv).
+
 ```bash
-python -m venv .venv
-.venv/Scripts/python -m pip install -r requirements.txt     # Windows
-# python3 -m venv .venv && .venv/bin/pip install -r requirements.txt   # macOS/Linux
+uv venv
+uv pip install -r requirements.txt
 ```
+
+Already have a working `.venv` with `laya` in it? Skip ahead to [Run it](#run-it).
 
 JEV is remote and needs a key:
 
@@ -55,13 +66,26 @@ echo 'OPENROUTER_API_KEY=sk-or-...' > .env.local
 `.env.local` is gitignored. LAYA needs no key — it downloads its checkpoint on
 first use, then runs locally.
 
+### Why uv
+
+LAYA is a local package, so it exists only in the interpreter that installed it.
+A bare `python -m webui` picks up whatever Python is first on `PATH`. If that
+interpreter happens to have FastAPI — very common — the console starts normally,
+serves the UI, and then dies the moment you flip the toggle to LAYA with
+`ModuleNotFoundError: No module named 'laya'`. Nothing looks broken until you use
+the one feature you wanted.
+
+`uv run` resolves the project's `.venv` instead, so the toggle always works. Every
+command below is written that way. If you would rather not use uv, run everything
+through the venv explicitly instead: `.venv/Scripts/python -m webui`.
+
 ## Run it
 
 ```bash
-python -m engine --list                       # what meshes exist
-python -m engine --flow refund_triage         # backend from the rule's @suggest
-python -m engine --flow incident_response -b laya
-python -m engine --flow loan_underwriting -b jev --json
+uv run python -m engine --list                       # what meshes exist
+uv run python -m engine --flow refund_triage         # backend from the rule's @suggest
+uv run python -m engine --flow incident_response -b laya
+uv run python -m engine --flow loan_underwriting -b jev --json
 ```
 
 | flag | meaning |
@@ -74,11 +98,22 @@ python -m engine --flow loan_underwriting -b jev --json
 | `--max-layers` | safety budget, default 80 |
 | `--list` | show every rule file with its size and suggested backend |
 
+Under `--json` every line is a self-contained object: one per event, then the
+finished trace as the final line. Nothing else is written to the stream, so it
+pipes straight into `jq` or a log collector. For a readable pretty-print:
+
+```bash
+uv run python -m engine --flow loan_underwriting -b jev --json | tail -1 | python -m json.tool
+```
+
 ### The console
 
 ```bash
-python -m webui          # http://127.0.0.1:8765
+uv run python -m webui          # http://127.0.0.1:8765
 ```
+
+> The screenshot at the top of this file is this page, and it is a real capture —
+> not a mockup. Every number in it came from a live model.
 
 Pick a flow, flip the **JEV / LAYA** toggle, paste a situation (or click one of
 the example seeds), and press run. The trace streams over SSE as the model
@@ -204,6 +239,7 @@ tools/validate_rules.py reachability, dangling links, a path count per mesh
 plugins.py              your own actions
 tests/                  purity, parser, engine, CLI
 runs/                   JSONL written by the `record` action
+docs/                   the screenshot above (and anything else worth showing)
 ```
 
 ## The meshes
@@ -218,13 +254,13 @@ Check any mesh for unreachable layers, links that go nowhere, and how many
 distinct routes it really has:
 
 ```bash
-python -m tools.validate_rules
+uv run python -m tools.validate_rules
 ```
 
 ## Tests
 
 ```bash
-python -m pytest -q
+uv run python -m pytest -q
 ```
 
 The interesting one is `tests/test_purity.py`. It also rejects conditional

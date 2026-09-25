@@ -116,3 +116,55 @@ def test_the_summary_table_dispatches_on_the_json_flag():
     from engine.cli import _SUMMARY, _json_summary, _no_summary
 
     assert _SUMMARY == {True: _json_summary, False: _no_summary}
+
+
+def test_json_mode_writes_exactly_one_object_per_line():
+    """Regression: the plugins banner used to print raw text into the stream."""
+    import json
+
+    from engine.cli import _emit
+
+    events = [
+        {"kind": "plugins", "detail": "loaded plugins.py (8 actions registered)"},
+        {"kind": "start", "flow": "x", "backend": "jev", "run": "r", "seed": "s"},
+        {"kind": "error", "message": "boom"},
+    ]
+    out = io.StringIO()
+    for event in events:
+        _emit(event, out, as_json=True)
+    lines = out.getvalue().splitlines()
+    assert len(lines) == len(events)
+    assert [json.loads(line)["kind"] for line in lines] == ["plugins", "start", "error"]
+
+
+def test_the_plugins_banner_still_renders_in_text_mode():
+    from engine.cli import render
+
+    lines = render({"kind": "plugins", "detail": "loaded plugins.py (8 actions registered)"})
+    assert lines
+    assert "plugins" in lines[0]
+
+
+def test_the_json_summary_is_a_single_parseable_line(rule, stub):
+    """The last line has to be one object, or the stream is not JSON lines."""
+    import json
+
+    from engine.cli import _emit, _json_summary
+    from engine.core import Engine
+
+    trace = Engine(ruleset=rule, backend=stub, on_event=lambda event: None).run("seed")
+    out = io.StringIO()
+    _json_summary(trace, out)
+    lines = out.getvalue().splitlines()
+    assert len(lines) == 1
+    assert json.loads(lines[0]) == trace.to_json()
+
+    # And the whole stream, events plus summary, parses line by line.
+    stream = io.StringIO()
+    trace = Engine(
+        ruleset=rule, backend=stub, on_event=lambda event: _emit(event, stream, True)
+    ).run("seed")
+    _json_summary(trace, stream)
+    parsed = [json.loads(line) for line in stream.getvalue().splitlines()]
+    assert parsed[-1]["status"] == trace.status
+
