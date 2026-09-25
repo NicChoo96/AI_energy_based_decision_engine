@@ -1,0 +1,9 @@
+# Core runtime. `laya` is a local energy model; if you only ever use JEV you can
+# drop it and the torch dependency it pulls in.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+requests>=2.31
+laya==0.3.20
+
+# Dev
+pytest>=8.0

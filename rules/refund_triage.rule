@@ -1,0 +1,65 @@
+# =============================================================================
+#  Refund triage — the smallest interesting mesh
+# -----------------------------------------------------------------------------
+#  Three layers. Every branch below is chosen by JEV or LAYA; the engine only
+#  looks the answer up in a table. The text after each '|' is the model's menu,
+#  never evaluated as logic.
+# =============================================================================
+
+@rule    Refund triage
+@about   A billing complaint arrives. The model decides who owns it, how it is settled and how the money actually moves.
+@suggest jev
+@example We were billed twice for March. Please refund the duplicate today or we will cancel our plan.
+@example The invoice PDF will not download in Chrome. Is that a known issue?
+@example Someone changed the bank details on our account and we never asked for that.
+
+@start   classify
+
+
+# ── Layer 1 — who owns this? ─────────────────────────────────────────────────
+@node    classify | First and cheapest cut: which capability is even looking at this?
+@effect  record | triage-started
+@ask     Which capability should own this request?
+@option  billing   | invoices, refunds, duplicate charges, payment disputes            | -> billing_play
+@option  technical | bugs, outages, errors, crashes, broken or missing product behaviour | -> technical_play
+@option  risk      | fraud, account takeover, abuse, suspicious or unauthorised activity | ! trigger | fraud-desk | freeze-review | Account frozen pending abuse review
+
+
+# ── Layer 2a — the money path ────────────────────────────────────────────────
+@node    billing_play | Billing cases carry two signals before the model picks a settlement.
+@signal  urgency | score | How urgent is the money problem? | can wait for the next release | should be fixed this week | blocking revenue right now
+@signal  churn   | noul  | Is the customer threatening to cancel or leave? | yes = an explicit threat to cancel, churn or move to a competitor | no = no mention of leaving
+@effect  annotate | billing capability engaged
+@ask     How should billing settle this case?
+@option  auto_refund | a small, unambiguous duplicate charge and the customer is calm   | -> refund_channel
+@option  escalate     | urgent, or the customer is threatening to churn                  | ! page | billing-lead | high
+@option  hold_review  | the discrepancy is large, ambiguous or looks deliberate          | ! trigger | case-queue | billing-review | Open a manual billing review
+
+
+# ── Layer 3a — how does the money move? ──────────────────────────────────────
+@node    refund_channel | Only reached when an automatic refund was judged appropriate.
+@signal  goodwill | noul | Would a goodwill gesture be appropriate here? | yes = the customer has lost time or patience | no = a plain correction is enough
+@ask     How should the refund be delivered?
+@option  original_method | the original payment method is still valid and open    | ! trigger | payments-api | refund-original | Refund the duplicate charge to the original card
+@option  account_credit  | the original method has expired or is unusable         | ! trigger | payments-api | refund-credit | Issue account credit instead
+@option  manual_cheque   | the customer explicitly asked for a cheque or transfer | ! trigger | finance-ops | cheque | Queue a manual cheque request
+
+
+# ── Layer 2b — the product path ──────────────────────────────────────────────
+@node    technical_play | Severity and reproducibility, then the model picks a response.
+@signal  severity     | score | How bad is the defect? | cosmetic only | degraded but usable | a feature is broken | data loss or an outage
+@signal  reproducible | noul  | Can the customer reproduce it reliably? | yes = steps were given that reproduce every time | no = intermittent, unclear or not yet tried
+@effect  annotate | technical capability engaged
+@ask     What should the technical response be?
+@option  known_issue   | matches something already tracked and triaged          | ! trigger | issue-tracker | link-and-update | Link the customer to the tracked issue and attach their report
+@option  new_bug       | a real defect that nobody has filed yet               | -> bug_commitment
+@option  guidance_only | expected behaviour, a misuse question or a docs gap   | ! trigger | email | walkthrough | Reply with a walkthrough
+
+
+# ── Layer 3b — what do we commit to? ─────────────────────────────────────────
+@node    bug_commitment | The last decision on the product path.
+@signal  workaround | noul | Is there a workaround the customer can use today? | yes = an acceptable workaround exists | no = the customer is fully blocked
+@ask     What should we commit to publicly?
+@option  hotfix_sprint | reproducible, high severity and no acceptable workaround   | ! trigger | sprint-board | hotfix | Add to the current hotfix sprint
+@option  next_release  | moderate severity, or a workaround keeps them moving       | ! trigger | sprint-board | backlog-next | Schedule for the next planned release
+@option  document_only | the real fix is documentation or guidance, not code        | ! trigger | docs | update-article | Open a documentation task

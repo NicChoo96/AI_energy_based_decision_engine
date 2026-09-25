@@ -1,0 +1,193 @@
+# =============================================================================
+#  Autonomous incident commander
+# -----------------------------------------------------------------------------
+#  A five-layer mesh. Every path through it is five model decisions in a row,
+#  and the accumulated state grows with each one, so the fifth decision is made
+#  with everything the first four learned.
+#
+#       triage_domain      5 branches
+#         domain_*         4 branches   (5 nodes, one per domain)
+#           posture_*      3 branches   (4 nodes)
+#             engage_*     3 branches   (3 nodes)
+#               comms_*    3 branches   (3 nodes)
+#                 -> ! trigger ...     (the actual page, rollback, war room)
+#
+#  5 x 4 x 3 x 3 x 3 = 540 distinct incident playbooks, none of them written
+#  down anywhere. The engine contains no incident logic at all.
+# =============================================================================
+
+@rule    Autonomous incident commander
+@about   Classifies an incident, chooses a mitigation posture, decides who to wake up, shapes the customer story and commits the follow-through. Five model decisions per run.
+@suggest jev
+@example Checkout is returning 502s for about 30% of users since the 14:20 deploy. Revenue is down and three enterprise accounts have already emailed support.
+@example Customers in the EU report that their session is silently switched to a different account after login. Started roughly an hour ago.
+@example The nightly ETL job wrote a truncated batch to the analytics warehouse. Dashboards are showing roughly 12% low. Not customer facing but finance will notice tomorrow.
+@example Deploys have been slow all morning. Nothing is broken, but the pipeline is queueing for 20 minutes per build.
+
+@start   triage_domain
+
+
+# ═══ Layer 1 — which engineering domain owns this? ═══════════════════════════
+@node    triage_domain | Cheapest possible cut: route the raw report to a domain before spending any other decision.
+@effect  record | incident-opened
+@ask     Which engineering domain owns this incident?
+@option  payments | checkout, billing, payment processing, refunds, revenue-affecting failures | -> domain_payments
+@option  identity | login, sessions, tokens, SSO, permissions, account switching             | -> domain_identity
+@option  data     | databases, migrations, warehouses, ETL, corruption or incorrect numbers | -> domain_data
+@option  platform | Kubernetes, networking, capacity, autoscaling, deploys, CI pipelines     | -> domain_platform
+@option  edge     | CDN, DNS, TLS, WAF, client-side rendering, browser compatibility          | -> domain_edge
+
+
+# ═══ Layer 2 — what mitigation posture fits? ════════════════════════════════
+@node    domain_payments | Money is moving wrongly. Every signal matters.
+@signal  severity        | score | How bad is the payment incident? | cosmetic or internal | degraded, some users affected | a core flow is broken | revenue is halted entirely
+@signal  customer_facing | noul  | Are real customers affected right now? | yes = users can see or feel the failure | no = only internal systems notice
+@signal  data_loss       | noul  | Is money, an order or a ledger entry in a wrong state? | yes = values are wrong or missing | no = failures are clean
+@effect  annotate | payments domain engaged, revenue path at risk
+@ask     Which immediate mitigation posture fits this incident?
+@option  rollback   | a recent deploy is the suspected cause and reverting is cheap        | -> posture_rollback
+@option  hotfix     | the cause is understood and a small targeted patch is available       | -> posture_hotfix
+@option  contain    | the failure is still spreading and must be fenced off first          | -> posture_contain
+@option  observe    | impact is tolerable and evidence is still too thin to act on safely  | -> posture_observe
+
+@node    domain_identity | Sessions and permissions. Correctness beats speed.
+@signal  severity        | score | How bad is the identity incident? | cosmetic | degraded, some logins fail | a core authentication flow is broken | accounts are accessible to the wrong people
+@signal  customer_facing | noul  | Are real users blocked or exposed? | yes = users cannot reach their account or see someone else's | no = only internal tooling
+@signal  data_loss       | noul  | Is an account, role or session in a wrong state? | yes = access is incorrectly granted or revoked | no = failures are clean
+@effect  annotate | identity domain engaged, authentication integrity at risk
+@ask     Which immediate mitigation posture fits this incident?
+@option  rollback   | an identity change was deployed recently and reverting is safe        | -> posture_rollback
+@option  hotfix     | the flaw is pinned down and can be closed with a narrow patch      | -> posture_hotfix
+@option  contain    | the exposure is growing and access must be cut off first           | -> posture_contain
+@option  observe    | nothing is confirmed yet and acting blind could lock users out     | -> posture_observe
+
+@node    domain_data | Numbers are wrong. Nothing is rolled back casually.
+@signal  severity        | score | How bad is the data incident? | cosmetic or cosmetic reporting | a report is off | a source of truth is wrong | data has been lost or corrupted
+@signal  customer_facing | noul  | Can customers or finance see the wrong numbers? | yes = dashboards, invoices or statements are visibly wrong | no = internal-only tables
+@signal  data_loss       | noul  | Has canonical data been destroyed or truncated? | yes = rows are gone, truncated or corrupted | no = data is intact
+@effect  annotate | data domain engaged, integrity of record at risk
+@ask     Which immediate mitigation posture fits this incident?
+@option  rollback   | a schema or pipeline change caused it and a clean revert exists     | -> posture_rollback
+@option  hotfix     | the corruption is bounded and a backfill or patch will repair it    | -> posture_hotfix
+@option  contain    | more batches are still writing and must be stopped immediately      | -> posture_contain
+@option  observe    | impact is not yet quantified and stopping the pipeline risks worse  | -> posture_observe
+
+@node    domain_platform | Capacity and delivery. The safest fixes usually live here.
+@signal  severity        | score | How bad is the platform incident? | noisy or slow | degraded latency or capacity | a service is unavailable | a region or cluster is down
+@signal  customer_facing | noul  | Are customers experiencing it? | yes = user traffic is failing or slow | no = only internal pipelines
+@signal  data_loss       | noul  | Is anything persisted at risk? | yes = writes are failing or being lost | no = stateless impact
+@effect  annotate | platform domain engaged, availability at risk
+@ask     Which immediate mitigation posture fits this incident?
+@option  rollback   | a config or deploy landed just before the failure started       | -> posture_rollback
+@option  hotfix     | a known limit or flag can be raised to relieve it now              | -> posture_hotfix
+@option  contain    | the blast radius is spreading and must be fenced first             | -> posture_contain
+@option  observe    | it looks like noise, a blip or routine autoscaling                 | -> posture_observe
+
+@node    domain_edge | The last mile. Often the fastest to fix, often the widest impact.
+@signal  severity        | score | How bad is the edge incident? | cosmetic | a subset of browsers or regions affected | most requests are affected | the site is unreachable or visibly broken
+@signal  customer_facing | noul  | Do end users see it directly? | yes = visible in the browser or app | no = only synthetic checks
+@signal  data_loss       | noul  | Is anything persisted at risk? | yes = requests are being lost or corrupted | no = impact is presentation only
+@effect  annotate | edge domain engaged, client experience at risk
+@ask     Which immediate mitigation posture fits this incident?
+@option  rollback   | a CDN, DNS or TLS change went out shortly before it started  | -> posture_rollback
+@option  hotfix     | it is a configuration value or cache rule that can be corrected | -> posture_hotfix
+@option  contain    | bad responses are spreading through caches and must be purged    | -> posture_contain
+@option  observe    | it is confined to a tiny slice of traffic                       | -> posture_observe
+
+
+# ═══ Layer 3 — who has to be awake for this? ════════════════════════════════
+@node    posture_rollback | Reverting is already chosen; now decide who owns that act.
+@signal  blast_radius    | score | How many people are affected? | a handful of internal users | one team or region | a large customer segment | everyone
+@signal  rollback_safety | noul  | Is reverting genuinely safe, or will it lose data? | yes = the revert is clean and stateless | no = reverting could drop or reorder data
+@effect  annotate | posture ROLLBACK selected
+@ask     Who must be engaged right now?
+@option  command | the revert is risky, wide or touches money or identity        | -> engage_command
+@option  vendor  | the failure sits inside a third-party dependency we do not own  | -> engage_vendor
+@option  owner   | the owning team can perform the revert alone and safely        | -> engage_owner
+
+@node    posture_hotfix | A targeted patch is chosen; now decide how brave to be.
+@signal  blast_radius    | score | How many people are affected? | a handful of internal users | one team or region | a large customer segment | everyone
+@signal  rollback_safety | noul  | If the patch misfires, is a clean retreat available? | yes = the change is fully reversible | no = a bad patch would make things worse
+@effect  annotate | posture HOTFIX selected
+@ask     Who must be engaged right now?
+@option  command | the patch is high risk, wide or hard to reverse            | -> engage_command
+@option  vendor  | the fix depends on a provider, library or upstream owner | -> engage_vendor
+@option  owner   | the owning team can ship the patch alone                | -> engage_owner
+
+@node    posture_contain | Fencing first; now decide who coordinates the fence.
+@signal  blast_radius    | score | How many people are affected? | a handful of internal users | one team or region | a large customer segment | everyone
+@signal  rollback_safety | noul  | Is containment itself reversible? | yes = traffic or access can be restored cleanly | no = containment will strand users or data
+@effect  annotate | posture CONTAIN selected
+@ask     Who must be engaged right now?
+@option  command | the fence affects customers or multiple teams                  | -> engage_command
+@option  vendor  | the leak originates above us in the dependency chain            | -> engage_vendor
+@option  owner   | a single team can isolate it without coordination               | -> engage_owner
+
+@node    posture_observe | The decision was to wait. Now decide who watches.
+@signal  blast_radius    | score | How many people are affected? | a handful of internal users | one team or region | a large customer segment | everyone
+@signal  rollback_safety | noul  | Does waiting carry any risk of getting worse? | yes = waiting could compound the damage | no = waiting is safe and cheap
+@effect  annotate | posture OBSERVE selected
+@ask     Who must be engaged right now?
+@option  command | early warning is cheap and the downside is large        | -> engage_command
+@option  vendor  | we are relying on a provider's health or timeline      | -> engage_vendor
+@option  owner   | the owning team can watch this from its own dashboard  | -> engage_owner
+
+
+# ═══ Layer 4 — what does the outside world hear? ════════════════════════════
+@node    engage_command | An incident commander is being woken up. Define the story they will tell.
+@signal  regulatory | noul | Is there a contractual, legal or regulatory duty to disclose? | yes = an SLA, regulator or contract imposes a clock | no = no external obligation
+@signal  external   | noul | Have outsiders already noticed or asked? | yes = customers, media or partners are already asking | no = nobody outside knows
+@effect  annotate | incident command engaged
+@ask     What is the customer-facing story?
+@option  status_page | broad customer impact and already externally visible      | -> comms_status
+@option  direct      | a small number of identifiable, high-value accounts       | -> comms_direct
+@option  silent      | impact is contained, invisible and being handled quietly  | -> comms_silent
+@option  exec_bridge | lives, safety, money or the whole platform are at stake   | -> escalate_to_exec
+
+@node    engage_vendor | A third party owns part of the failure. Define the story.
+@signal  regulatory | noul | Is there a contractual, legal or regulatory duty to disclose? | yes = an SLA, regulator or contract imposes a clock | no = no external obligation
+@signal  external   | noul | Have outsiders already noticed or asked? | yes = customers, media or partners are already asking | no = nobody outside knows
+@effect  annotate | vendor escalation engaged
+@ask     What is the customer-facing story?
+@option  status_page | the dependency outage is broad and already visible       | -> comms_status
+@option  direct      | a few enterprise accounts deserve a hands-on update     | -> comms_direct
+@option  silent      | the dependency recovered and nobody was affected        | -> comms_silent
+
+@node    engage_owner | The owning team is handling it alone. Define the story.
+@signal  regulatory | noul | Is there a contractual, legal or regulatory duty to disclose? | yes = an SLA, regulator or contract imposes a clock | no = no external obligation
+@signal  external   | noul | Have outsiders already noticed or asked? | yes = customers, media or partners are already asking | no = nobody outside knows
+@effect  annotate | owning team engaged without command escalation
+@ask     What is the customer-facing story?
+@option  status_page | the blast radius turns out to be wider than the team assumed | -> comms_status
+@option  direct      | a handful of accounts noticed and deserve a reply        | -> comms_direct
+@option  silent      | no external signal and no obligation                     | -> comms_silent
+
+
+# ═══ Layer 5 — what do we commit to afterwards? ═════════════════════════════
+@node    comms_status | A public status page is going out. What is the follow-through?
+@signal  detected | score | How well do we actually understand the cause? | a total mystery | a strong hypothesis | the cause is confirmed | the cause is confirmed and reproduced
+@ask     What is the follow-through?
+@option  full_postmortem | customer-visible, wide impact and the cause is understood      | ! trigger | postmortem | blameless-rca | Open a public blameless postmortem within 48 hours
+@option  internal_review | customer-visible but the cause is still unclear              | ! trigger | review-board | deep-dive | Schedule an internal deep dive before any public write-up
+@option  watch_and_log   | impact was small enough that a written retrospective is enough | ! trigger | knowledge-base | entry | Record the incident and the fix in the knowledge base
+
+@node    comms_direct | Named accounts are being told. What is the follow-through?
+@signal  detected | score | How well do we actually understand the cause? | a total mystery | a strong hypothesis | the cause is confirmed | the cause is confirmed and reproduced
+@ask     What is the follow-through?
+@option  account_credit  | the accounts lost money or time and will want recompense  | ! trigger | crm | credit-note | Issue a service credit and a named follow-up owner
+@option  account_review  | the accounts are strategic and the root cause is uncertain | ! trigger | crm | exec-review | Put the accounts on the executive review list
+@option  account_update  | the fix is confirmed and a simple update will close it    | ! trigger | crm | resolution-note | Send the resolution note and close the loop
+
+@node    comms_silent | Nothing has been said publicly. What is the follow-through?
+@signal  detected | score | How well do we actually understand the cause? | a total mystery | a strong hypothesis | the cause is confirmed | the cause is confirmed and reproduced
+@ask     What is the follow-through?
+@option  alarm_bell  | we decided to stay quiet but the cause is still unknown — that is dangerous | ! trigger | alerting | early-warning | Raise an early-warning alert because the root cause is still unexplained
+@option  quiet_fix   | the cause is confirmed and a low-risk correction exists              | ! trigger | backlog | scheduled-fix | Schedule the fix on the normal backlog
+@option  no_action   | the incident was transient and self-resolved                         | ! trigger | knowledge-base | note | Log a one-line note and close it
+
+# A pure @end layer: no options, only effects. Demonstrates the other landing kind.
+@node    escalate_to_exec
+@end
+@note    Reached directly from a command engagement when the situation is grave.
+@effect  trigger | exec-bridge | on-call-exec | Executive bridge opened for a severity-one incident
+@effect  record  | exec-escalation

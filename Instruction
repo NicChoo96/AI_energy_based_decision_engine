@@ -1,0 +1,11 @@
+My main goal is to replicate a dynamic rule based in text file where a simple dynamically UI can simulate from text and choices all the way to actions and even simulate triggers
+
+I want all the if else and switch branches to SOLEly only depend on our JEV/LAYA classifier AI model to pick, I do not want a single IF ELSE, The only exception im giving is only choosing between JEV OR LAYA.
+
+Firstly, study how jev_python_sample and laya_python_sample to create the interface to call them.
+
+This is mainly to experiment pure energy based AI model full logic routing, where our entire loop if else statements or logic tree is based only from the AI models.
+
+The final end goal is where I can simply setup the rules dynamically in pure text in multiple layers until we reach the end choice to call or trigger.
+
+Other than this dynamic custom usage, help me generate one where its highly complex that can perform very interesting system from software or business use cases as a demo. Then allow me to switch between JEV or laya before running the flow.

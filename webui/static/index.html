@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Rule mesh console — energy-model routing</title>
+<link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+<header class="bar">
+  <div class="brand">
+    <span class="dot"></span>
+    <b>Rule mesh console</b>
+    <span class="muted">every branch decided by JEV or LAYA — no conditionals anywhere</span>
+  </div>
+  <div class="stats" id="stats"></div>
+</header>
+
+<main class="grid">
+
+  <!-- ── control column ─────────────────────────────────────────────── -->
+  <section class="panel">
+    <h2>1 · Flow</h2>
+    <select id="rule" class="wide"></select>
+    <p class="meta" id="ruleMeta"></p>
+
+    <h2>2 · Backend</h2>
+    <div class="toggle" id="backend">
+      <button data-kind="jev" class="on">JEV<small>remote</small></button>
+      <button data-kind="laya">LAYA<small>local</small></button>
+    </div>
+    <p class="meta" id="backendMeta"></p>
+
+    <h2>3 · Situation</h2>
+    <textarea id="seed" rows="7" placeholder="Describe the situation in plain text. The model reads this and every fact absorbed since."></textarea>
+    <div class="chips" id="examples"></div>
+
+    <h2>4 · Run</h2>
+    <button id="run" class="primary">Run the mesh</button>
+    <label class="check"><input type="checkbox" id="live" /> really send http actions</label>
+    <label class="check"><input type="checkbox" id="rawEvents" /> show raw event log</label>
+  </section>
+
+  <!-- ── trace column ──────────────────────────────────────────────── -->
+  <section class="panel trace">
+    <h2>The decision trace</h2>
+    <div id="trace" class="empty">Nothing has run yet. Pick a flow, pick a backend, write a situation, press run.</div>
+  </section>
+
+  <!-- ── state column ──────────────────────────────────────────────── -->
+  <section class="panel">
+    <h2>State ledger</h2>
+    <p class="meta">Free text. This — and nothing else — is what the model is asked about.</p>
+    <pre id="ledger" class="ledger">—</pre>
+
+    <h2>Actions &amp; triggers</h2>
+    <ul id="actions" class="actions"><li class="muted">none yet</li></ul>
+
+    <h2>Editor</h2>
+    <div class="row">
+      <button id="loadSrc">load</button>
+      <button id="checkSrc">check</button>
+      <button id="saveSrc" class="primary">save</button>
+    </div>
+    <p class="meta" id="saveMeta"></p>
+    <textarea id="src" rows="16" spellcheck="false"></textarea>
+  </section>
+
+</main>
+
+<pre id="raw" class="raw" hidden></pre>
+
+<script src="/app.js"></script>
+</body>
+</html>

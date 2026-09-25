@@ -1,0 +1,135 @@
+import math
+import re
+
+# =====================================================================
+# 1. THE JEV ENERGY CORE (Pure Text Matching Surface)
+# =====================================================================
+def compute_jev(state_text: str, choice_text: str, guards: list) -> float:
+    """
+    Computes Joint Energy E(State, Choice).
+    Lower Energy = Better Match / Higher Probability.
+    
+    Energy = Base Lexical Distance + Guard Penalties - Context Affinity
+    """
+    state_words = set(re.findall(r'\w+', state_text.lower()))
+    choice_words = set(re.findall(r'\w+', choice_text.lower()))
+    
+    # Context Affinity: overlapping semantics lower energy
+    overlap = len(state_words.intersection(choice_words))
+    energy = 10.0 - (overlap * 2.0)
+    
+    # State Guarding: Apply active energy penalties/barriers from guards
+    for guard_condition, penalty in guards:
+        if guard_condition.lower() in state_text.lower():
+            energy += penalty  # High penalty forces the path away from this choice
+            
+    return energy
+
+def select_lowest_energy(state_text: str, choices: list, guards: list):
+    """Evaluates all candidate choices simultaneously and returns the minimum energy path."""
+    scored = []
+    for choice in choices:
+        e = compute_jev(state_text, choice["label"], guards)
+        scored.append((e, choice))
+    
+    # Sort by lowest energy
+    scored.sort(key=lambda x: x[0])
+    best_energy, best_choice = scored[0]
+    return best_energy, best_choice
+
+
+# =====================================================================
+# 2. DYNAMIC RULE MESH & PARTITIONS (Everything is Text / State)
+# =====================================================================
+
+# Global Guard Policies (Business rules as energy boundaries)
+GUARDS = [
+    ("blocked", 999.0),       # Hard barrier: High penalty
+    ("vip_user", -5.0),       # Soft incentive: Reduces energy
+]
+
+# Dynamic custom function that can be plugged in as an action output
+def custom_payout_function(state_text):
+    return f"[EXECUTED DYNAMIC FUNCTION]: Processing instant VIP refund for state -> '{state_text}'"
+
+
+# The Rule Mesh: Partitions are just choices, Trees are just sub-rules
+RULE_MESH = {
+    "root": {
+        "label": "Partition Selection",
+        "choices": [
+            {"label": "Route to Finance Partition", "next": "partition_finance"},
+            {"label": "Route to Support Partition", "next": "partition_support"},
+        ]
+    },
+    "partition_finance": {
+        "label": "Finance Sub-tree",
+        "choices": [
+            {"label": "Process standard refund payment", "action": "Text Output: Refund queued standard batch."},
+            {"label": "Trigger VIP instant payout execution", "action": custom_payout_function},
+        ]
+    },
+    "partition_support": {
+        "label": "Support Sub-tree",
+        "choices": [
+            {"label": "Escalate ticket to human agent", "action": "Text Output: Ticket transferred to agent."},
+            {"label": "Send automated FAQ link", "action": "Text Output: Sent help docs link."},
+        ]
+    }
+}
+
+
+# =====================================================================
+# 3. THE SIMPLISTIC JEV LOOP
+# =====================================================================
+def run_jev_loop(input_sentences: list):
+    # 1. States are just plain text sentences linked together
+    state_text = " ".join(input_sentences)
+    current_node_key = "root"
+    
+    print(f"--- STARTING JEV EXECUTION LOOP ---")
+    print(f"Initial Accumulated State: '{state_text}'\n")
+    
+    while True:
+        node = RULE_MESH[current_node_key]
+        choices = node["choices"]
+        
+        # JEV decides the choice (whether it's choosing a Partition or an Action)
+        energy, best_choice = select_lowest_energy(state_text, choices, GUARDS)
+		print(f"-[Node: {node['label']}] Evaluated Choices.")
+        print(f"  Selected Choice: '{best_choice['label']}' | Energy: {energy:.1f}")
+        
+        # Branch 1: The choice points to a Partition / Sub-tree
+        if "next" in best_choice:
+            current_node_key = best_choice["next"]
+            # State dynamically accumulates text as choices are made
+            state_text += f" -> Selected {best_choice['label']}"
+            
+        # Branch 2: Reached a final choice (Action Output or Dynamic Function)
+        elif "action" in best_choice:
+            action_handler = best_choice["action"]
+            
+            print(f"\n--- FINAL ACTION REACHED ---")
+            if callable(action_handler):
+                # Executing dynamically attached custom function
+                result = action_handler(state_text)
+                print(result)
+            else:
+                # Direct plain-text output
+                print(f"[PLAIN TEXT OUTPUT]: {action_handler}")
+            break
+
+
+# =====================================================================
+# 4. EXAMPLES / DEMONSTRATION
+# =====================================================================
+
+print("================ SCENARIO A ================")
+# Input sentences favor Finance + Instant Payout due to "vip_user" keyword matching guards
+sentences_a = ["User requested a refund for order #102.", "Account flag is vip_user."]
+run_jev_loop(sentences_a)
+
+print("\n================ SCENARIO B ================")
+# Input sentences favor Support escalation
+sentences_b = ["Customer is angry about broken support ticket.", "Needs human agent escalation."]
+run_jev_loop(sentences_b)

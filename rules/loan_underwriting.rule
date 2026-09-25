@@ -1,0 +1,195 @@
+# =============================================================================
+#  Credit underwriting pipeline
+# -----------------------------------------------------------------------------
+#  The same five-layer shape, applied to a regulated business process instead of
+#  an engineering one. The point of this file is that it contains no rules —
+#  no thresholds, no debt-to-income limits, no score cut-offs. Those live in the
+#  semantics text handed to the model, and the model makes the call.
+#
+#       applicant_profile   5 branches
+#         profile_*         4 branches   (5 nodes)
+#           risk_*          3 branches   (4 nodes)
+#             price_*       3 branches   (3 nodes)
+#               structure_* 3 branches   (3 nodes)
+#                 -> ! trigger ...       (offer, decline-with-reason, manual board)
+# =============================================================================
+
+@rule    Credit underwriting pipeline
+@about   Reads a loan application, classifies the applicant, prices the risk and commits to a decision or an escalation. Five model decisions, no hard-coded policy thresholds.
+@suggest laya
+@example Applicant is a salaried software engineer, 6 years in role, requesting 45,000 over 4 years for a home renovation. Existing card balance is small and always paid on time.
+@example Small bakery owner, trading for 14 months, wants 120,000 over 7 years for a second oven and a delivery van. Revenue is growing but lumpy and they have no audited accounts yet.
+@example Applicant says income is 9,000 a month but the bank statement shows irregular cash deposits and the address has changed three times in the last year. Wants the money within 48 hours.
+@example Returning customer who repaid two previous loans early, now asking for 25,000 over 3 years at a better rate because they are refinancing a higher-interest loan elsewhere.
+@example Pre-revenue startup founder wants 500,000 over 10 years against future equity. No trading history, no collateral, and the pitch deck arrives after the application.
+
+@start   applicant_profile
+
+
+# ═══ Layer 1 — what kind of applicant is this? ══════════════════════════════
+@node    applicant_profile | Classify the applicant from the raw application text before looking at the numbers.
+@effect  record | application-received
+@ask     What kind of applicant is this?
+@option  salaried      | employed for someone else on a regular, documented salary    | -> profile_salaried
+@option  business      | self-employed, a trading company or a sole trader            | -> profile_business
+@option  investor      | applying against assets, investments or property rather than salary | -> profile_investor
+@option  venture       | an early-stage or pre-revenue company seeking growth or equity finance | -> profile_venture
+@option  returning     | a previous borrower of ours, applying again                  | -> profile_returning
+
+
+# ═══ Layer 2 — how does this profile read? ═════════════════════════════════
+@node    profile_salaried | Salary cases are the most legible. Look at stability and strain.
+@signal  capacity | score | How much room is there between income and existing obligations? | heavily stretched, little or no headroom | workable but with little slack | comfortable | well within means
+@signal  stability | noul | Is the income stable and likely to continue? | yes = long tenure, permanent contract, clear continuity | no = recent job change, contract or probation
+@signal  accuracy | noul | Does anything in the application look inconsistent or embellished? | yes = figures do not reconcile with the evidence given | no = the application is internally consistent
+@effect  annotate | salaried profile assessed
+@ask     How should this salaried application be treated?
+@option  prime        | stable income, comfortable capacity and a clean, consistent file | -> risk_prime
+@option  standard     | serviceable income with ordinary levels of uncertainty            | -> risk_standard
+@option  watch        | some strain or some inconsistency worth pricing for              | -> risk_watch
+@option  manual_review | the file cannot be resolved from the text alone                 | -> risk_manual_review
+
+@node    profile_business | Trading businesses are only partially legible from a narrative.
+@signal  capacity | score | How much room is there between trading income and existing obligations? | heavily stretched, little or no headroom | workable but with little slack | comfortable | well within means
+@signal  stability | noul | Is the trading record durable enough to rely on? | yes = multiple years of trading, diversified customers, audited or bank-verified | no = young, single-customer or unverifiable trading
+@signal  accuracy | noul | Does anything in the application look inconsistent or embellished? | yes = figures do not reconcile with the evidence given | no = the application is internally consistent
+@effect  annotate | business profile assessed
+@ask     How should this business application be treated?
+@option  prime        | durable trading, comfortable capacity and a clean, consistent file | -> risk_prime
+@option  standard     | a real trading business with ordinary lumpiness and ordinary risk  | -> risk_standard
+@option  watch        | thin, young or concentrated trading, or a file worth pricing for  | -> risk_watch
+@option  manual_review | the trading position cannot be judged from the text alone        | -> risk_manual_review
+
+@node    profile_investor | Asset-backed cases turn on the quality and liquidity of the assets.
+@signal  capacity | score | How much unmortgaged, liquid or lendable asset stands behind this? | thin, encumbered or illiquid | adequate but not liquid | strong | very strong and clearly liquid
+@signal  stability | noul | Are the underlying assets durable and realistically valued? | yes = long-held, independently valued, liquid | no = recently acquired, self-valued or hard to sell
+@signal  accuracy | noul | Does anything in the application look inconsistent or embellished? | yes = figures do not reconcile with the evidence given | no = the application is internally consistent
+@effect  annotate | investor profile assessed
+@ask     How should this asset-backed application be treated?
+@option  prime        | strong, liquid assets and a clean, consistent file              | -> risk_prime
+@option  standard     | solid assets with normal valuation and liquidity uncertainty    | -> risk_standard
+@option  watch        | illiquid, encumbered or self-valued assets                      | -> risk_watch
+@option  manual_review | asset ownership or valuation cannot be established from the text | -> risk_manual_review
+
+@node    profile_venture | Pre-revenue and early-stage cases are decided on conviction, not ratios.
+@signal  capacity | score | How much of the repayment can already be seen in the business? | nothing yet, entirely prospective | some early revenue | real revenue but not yet covering service | the repayment is already covered by trading
+@signal  stability | noul | Is there a durable business behind the story? | yes = real usage, real customers, a real product | no = intentions, projections and a narrative
+@signal  accuracy | noul | Does anything in the application look inconsistent or embellished? | yes = figures do not reconcile with the evidence given | no = the application is internally consistent
+@effect  annotate | venture profile assessed, conviction decision
+@ask     How should this venture application be treated?
+@option  prime        | unusual traction and a file that survives scrutiny            | -> risk_prime
+@option  standard     | a credible early business with ordinary early-stage risk      | -> risk_standard
+@option  watch        | a story that has not yet met the evidence                     | -> risk_watch
+@option  manual_review | conviction belongs with people, not a text classifier        | -> risk_manual_review
+
+@node    profile_returning | Existing history is the strongest signal available.
+@signal  capacity | score | How does the current request compare with the previous facility? | a big step up from anything repaid before | somewhat larger than before | about the same as before | smaller or already repaid
+@signal  stability | noul | Did the previous relationship go well? | yes = repaid on time or early, no incidents | no = arrears, restructuring or defaults
+@signal  accuracy | noul | Does anything in the application look inconsistent or embellished? | yes = figures do not reconcile with the evidence given | no = the application is internally consistent
+@effect  annotate | returning borrower assessed
+@ask     How should this returning application be treated?
+@option  prime        | a clean history and a request that stays inside familiar ground | -> risk_prime
+@option  standard     | a good history with a modest step up in exposure              | -> risk_standard
+@option  watch        | a good history but a materially larger ask                   | -> risk_watch
+@option  manual_review | the history is mixed or the step up is unprecedented        | -> risk_manual_review
+
+
+# ═══ Layer 3 — what risk posture does this deserve? ═════════════════════════
+@node    risk_prime | Strong file. Decide how much of the good news to share.
+@signal  competition | noul | Is the applicant demonstrably comparing offers elsewhere? | yes = they name a rival rate or are openly shopping | no = no sign of shopping around
+@signal  concentration | score | How much of our book would this single exposure represent? | negligible | minor | material | a large share of the portfolio
+@effect  annotate | risk posture PRIME
+@ask     Where should this case be priced?
+@option  price_sharp | negligible concentration and a genuinely strong file        | -> price_sharp
+@option  price_standard | a normal case that simply happens to be clean            | -> price_standard
+@option  price_sticky | a strong case that would be awkward to replace later       | -> price_sticky
+
+@node    risk_standard | Ordinary file. Price it as ordinary.
+@signal  competition | noul | Is the applicant demonstrably comparing offers elsewhere? | yes = they name a rival rate or are openly shopping | no = no sign of shopping around
+@signal  concentration | score | How much of our book would this single exposure represent? | negligible | minor | material | a large share of the portfolio
+@effect  annotate | risk posture STANDARD
+@ask     Where should this case be priced?
+@option  price_sharp | a marginal file but real competitive pressure          | -> price_sharp
+@option  price_standard | the ordinary case, priced ordinarily                 | -> price_standard
+@option  price_sticky | a standard case whose size or sector we would rather limit | -> price_sticky
+
+@node    risk_watch | A file with real concerns. Decide whether to price, condition or defer.
+@signal  competition | noul | Is the applicant demonstrably comparing offers elsewhere? | yes = they name a rival rate or are openly shopping | no = no sign of shopping around
+@signal  concentration | score | How much of our book would this single exposure represent? | negligible | minor | material | a large share of the portfolio
+@effect  annotate | risk posture WATCH
+@ask     Where should this case be priced?
+@option  price_sharp | concerns exist but we want the business and the risk is priced | -> price_sharp
+@option  price_standard | concerns are real and must be paid for                  | -> price_standard
+@option  price_sticky | the concern is structural and must be held for later    | -> price_sticky
+
+@node    risk_manual_review | Automated pricing is not available for this file.
+@signal  competition | noul | Is the applicant demonstrably comparing offers elsewhere? | yes = they name a rival rate or are openly shopping | no = no sign of shopping around
+@signal  concentration | score | How much of our book would this single exposure represent? | negligible | minor | material | a large share of the portfolio
+@effect  annotate | risk posture MANUAL REVIEW
+@ask     Where should this case be priced?
+@option  price_sharp | the file is strong on reflection and pricing is the whole question | -> price_sharp
+@option  price_standard | the file is ordinary but needs a human signature to proceed  | -> price_standard
+@option  price_sticky | a human is needed and the exposure should be held down       | -> price_sticky
+@option  out_of_authority | the exposure sits outside any delegated limit             | -> escalate_to_board
+
+
+# ═══ Layer 4 — what shape should the offer take? ════════════════════════════
+@node    price_sharp | Competitive pricing chosen. Now decide how much risk to carry.
+@signal  protection | score | How much cushion sits underneath this offer? | none at all | a thin cushion | a comfortable one | substantial and easily called
+@signal  tenor_fit  | noul | Does the requested term fit the purpose and the borrower? | yes = the term matches the asset or earning life | no = the term stretches well beyond what the money buys
+@effect  annotate | pricing band SHARP
+@ask     What shape should the offer take?
+@option  structure_clean   | a strong file that needs no conditions at all     | -> structure_clean
+@option  structure_covenant | the pricing is keen and we want early warning    | -> structure_covenant
+@option  structure_secured | the risk is real and should be collateral-backed | -> structure_secured
+
+@node    price_standard | Ordinary pricing chosen. Now decide how much risk to carry.
+@signal  protection | score | How much cushion sits underneath this offer? | none at all | a thin cushion | a comfortable one | substantial and easily called
+@signal  tenor_fit  | noul | Does the requested term fit the purpose and the borrower? | yes = the term matches the asset or earning life | no = the term stretches well beyond what the money buys
+@effect  annotate | pricing band STANDARD
+@ask     What shape should the offer take?
+@option  structure_clean   | an ordinary file that does not need conditions    | -> structure_clean
+@option  structure_covenant | monitoring is cheaper than a higher rate         | -> structure_covenant
+@option  structure_secured | the cushion is thin and security would fix it    | -> structure_secured
+
+@node    price_sticky | Punitive or protective pricing chosen. Now decide the shape.
+@signal  protection | score | How much cushion sits underneath this offer? | none at all | a thin cushion | a comfortable one | substantial and easily called
+@signal  tenor_fit  | noul | Does the requested term fit the purpose and the borrower? | yes = the term matches the asset or earning life | no = the term stretches well beyond what the money buys
+@effect  annotate | pricing band STICKY
+@ask     What shape should the offer take?
+@option  structure_clean   | we want the business and will simply charge for it | -> structure_clean
+@option  structure_covenant | we want visibility before anything goes wrong     | -> structure_covenant
+@option  structure_secured | we want the exposure covered or not written at all | -> structure_secured
+
+
+# ═══ Layer 5 — commit ═══════════════════════════════════════════════════════
+@node    structure_clean | Unconditional offer. Write the decision.
+@signal  confidence | score | How confident is this decision on the evidence available? | a genuine coin toss | reasonable | confident | beyond doubt
+@effect  annotate | structure CLEAN, unconditional
+@ask     What do we actually do?
+@option  offer_now       | confident enough that an offer should go out immediately | ! trigger | decision-engine | approve-clean | Issue an unconditional offer letter now
+@option  offer_short     | an offer is right but the facility should be smaller than asked | ! trigger | decision-engine | approve-reduced | Issue an offer for a reduced facility
+@option  decline_polite  | the decision is still a genuine coin toss             | ! trigger | decision-engine | decline-with-reason | Decline with a written, specific reason
+
+@node    structure_covenant | Conditional offer with monitoring. Write the decision.
+@signal  confidence | score | How confident is this decision on the evidence available? | a genuine coin toss | reasonable | confident | beyond doubt
+@effect  annotate | structure COVENANT, monitored
+@ask     What do we actually do?
+@option  offer_conditions | conditions can be expressed clearly and measured    | ! trigger | decision-engine | approve-conditional | Issue a conditional offer with reporting covenants
+@option  offer_short      | we want the exposure but not at the requested size | ! trigger | decision-engine | approve-reduced | Issue an offer for a reduced facility
+@option  defer_monitor    | more trading history would settle the question     | ! trigger | decision-engine | defer-12-months | Defer with a specific re-application date
+
+@node    structure_secured | Collateral-backed offer. Write the decision.
+@signal  confidence | score | How confident is this decision on the evidence available? | a genuine coin toss | reasonable | confident | beyond doubt
+@effect  annotate | structure SECURED, collateral-backed
+@ask     What do we actually do?
+@option  offer_secured   | collateral exists, can be valued and will be taken | ! trigger | decision-engine | approve-secured | Issue a secured offer subject to valuation
+@option  offer_short     | security is available but only covers part of it   | ! trigger | decision-engine | approve-reduced | Issue a partially secured reduced offer
+@option  manual_committee | the exposure is too large for any of the above  | ! trigger | credit-committee | refer | Refer the application to the credit committee
+
+# Pure @end layer, reached only when the whole file is beyond the rulebook.
+@node    escalate_to_board
+@end
+@note    Reserved for exposures that sit outside delegated authority.
+@effect  trigger | credit-committee | board | Application escalated to the board credit committee
+@effect  record  | board-escalation
